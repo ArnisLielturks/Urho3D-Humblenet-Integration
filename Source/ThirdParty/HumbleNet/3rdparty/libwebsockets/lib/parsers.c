@@ -229,6 +229,8 @@ int libwebsocket_parse(
     case WSI_TOKEN_HTTP_X_FORWARDED_FOR:
     case WSI_TOKEN_HTTP_X_REAL_IP:
 
+        printf("Reason, %d", wsi->u.hdr.parser_state);
+
 		lwsl_parser("WSI_TOK_(%d) '%c'\n", wsi->u.hdr.parser_state, c);
 
 		/* collect into malloc'd buffers */

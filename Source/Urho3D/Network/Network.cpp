@@ -45,17 +45,13 @@
 #include <SLikeNet/statistics.h>
 #endif
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif
-#ifndef __ANDROID__
-#include "libsocket.h"
-#endif
+#include <HumbleNet/humblenet/include/humblenet.h>
+#include <HumbleNet/humblenet/include/humblenet_p2p.h>
+#include <HumbleNet/humblenet/include/humblenet_socket.h>
 
 #ifdef SendMessage
 #undef SendMessage
 #endif
-#include "WS/WSEvents.h"
 
 #include "../DebugNew.h"
 
@@ -204,8 +200,6 @@ static const char* RAKNET_MESSAGEID_STRINGS[] = {
 static const int DEFAULT_UPDATE_FPS = 30;
 static const int SERVER_TIMEOUT_TIME = 10000;
 
-static Network* networkInstance;
-
 Network::Network(Context* context) :
     Object(context),
     updateFps_(DEFAULT_UPDATE_FPS),
@@ -221,7 +215,6 @@ Network::Network(Context* context) :
     remoteGUID_(nullptr)
 #endif
 {
-    networkInstance = this;
 #ifndef __EMSCRIPTEN__
     rakPeer_ = SLNet::RakPeerInterface::GetInstance();
     rakPeerClient_ = SLNet::RakPeerInterface::GetInstance();
@@ -297,6 +290,14 @@ Network::~Network()
     Disconnect(100);
     serverConnection_.Reset();
 
+    if (crossPlatformNetworking_ && isServer_) {
+        humblenet_p2p_unregister_alias("server_alias");
+    }
+
+    if (humblenet_p2p_is_initialized()) {
+        humblenet_shutdown();
+    }
+
 #ifndef __EMSCRIPTEN__
     clientConnections_.Clear();
 
@@ -348,24 +349,6 @@ void Network::NewConnectionEstablished(const SLNet::AddressOrGUID& connection)
     newConnection->SendEvent(E_CLIENTCONNECTED, eventData);
 }
 #endif
-
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
-void Network::NewConnectionEstablished(struct libwebsocket* socket)
-{
-    // Create a new client connection corresponding to this MessageConnection
-    SharedPtr<Connection> newConnection(new Connection(context_, true, socket));
-    newConnection->ConfigureNetworkSimulator(simulatedLatency_, simulatedPacketLoss_);
-    clientConnections2_[socket] = newConnection;
-    URHO3D_LOGINFO("Client " + newConnection->ToString() + " connected");
-
-    using namespace ClientConnected;
-
-    VariantMap& eventData = GetEventDataMap();
-    eventData[P_CONNECTION] = newConnection;
-    newConnection->SendEvent(E_CLIENTCONNECTED, eventData);
-}
-#endif
-
 #ifndef __EMSCRIPTEN__
 void Network::ClientDisconnected(const SLNet::AddressOrGUID& connection)
 {
@@ -385,27 +368,6 @@ void Network::ClientDisconnected(const SLNet::AddressOrGUID& connection)
         clientConnections_.Erase(i);
     }
 }
-
-#ifndef __ANDROID__
-void Network::ClientDisconnected(struct libwebsocket* socket)
-{
-// Remove the client connection that corresponds to this MessageConnection
-    auto i = clientConnections2_.find(socket);
-    if (i != clientConnections2_.end())
-    {
-        Connection* connection = i->second;
-        URHO3D_LOGINFO("Client " + connection->ToString() + " disconnected");
-
-        using namespace ClientDisconnected;
-
-        VariantMap& eventData = GetEventDataMap();
-        eventData[P_CONNECTION] = connection;
-        connection->SendEvent(E_CLIENTDISCONNECTED, eventData);
-
-        clientConnections2_.erase(i);
-    }
-}
-#endif
 #endif
 
 void Network::SetDiscoveryBeacon(const VariantMap& data)
@@ -441,22 +403,47 @@ void Network::SetPassword(const String& password)
     password_ = password;
 }
 
-#ifndef __ANDROID__
-void Network::WSConnect(const String& address, Scene* scene, const VariantMap& identity)
+void Network::InitCrossPlatformNetworking(const String& address, const String& gameToken, const String& gameSecret)
 {
-    wsClient_ = new WSClient(this);
-    internal_socket_t* socket = wsClient_->Connect(address, scene, identity);
-    serverConnection_ = new Urho3D::Connection(context_, false, socket);
+    humblenet_init();
+
+    humblenet_p2p_init(address.CString(), gameToken.CString(), gameSecret.CString(), NULL);
+    crossPlatformNetworking_ = true;
+}
+
+void Network::SetCrossPlatformServerAlias(const String& alias)
+{
+    serverAlias_ = alias;
+}
+
+int Network::GetCrossPlatformPeerId()
+{
+    return crossPlatformPeerId_;
+}
+
+void Network::CrossPlatformDisconnect()
+{
+    serverConnection_.Reset();
+}
+
+void Network::ConnectCrossPlatform(const String& alias, Scene* scene, const VariantMap& identity)
+{
+    PeerId serverPeerId = humblenet_p2p_virtual_peer_for_alias(alias.CString());
+    serverConnection_ = new Connection(context_, false, serverPeerId);
     serverConnection_->SetScene(scene);
     serverConnection_->SetIdentity(identity);
     serverConnection_->SetConnectPending(true);
+//    serverConnection_->ConfigureNetworkSimulator(simulatedLatency_, simulatedPacketLoss_);
 }
-#endif
 
 bool Network::Connect(const String& address, unsigned short port, Scene* scene, const VariantMap& identity)
 {
     URHO3D_PROFILE(Connect);
 
+    if (crossPlatformNetworking_) {
+        isServer_ = false;
+        return true;
+    }
 #ifndef __EMSCRIPTEN__
     if (!rakPeerClient_->IsActive())
     {
@@ -504,22 +491,8 @@ void Network::Disconnect(int waitMSec)
     if (!serverConnection_)
         return;
 
-#ifndef __ANDROID__
-    if (wsClient_) {
-        serverConnection_->SetWSSocket(0);
-//        wsClient_->Disconnect();
-
-#ifdef __EMSCRIPTEN__
-       EM_ASM({
-           Module.__libwebsocket.sockets.get(1).close();
-       });
-#endif
-    }
-#endif
-
     URHO3D_PROFILE(Disconnect);
     serverConnection_->Disconnect(waitMSec);
-    serverConnection_.Reset();
 }
 
 bool Network::StartServer(unsigned short port, unsigned int maxConnections)
@@ -529,10 +502,23 @@ bool Network::StartServer(unsigned short port, unsigned int maxConnections)
 
     URHO3D_PROFILE(StartServer);
 
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
-    wsServer_ = new WSServer(this);
-    wsServer_->Start();
-#endif
+
+    if (crossPlatformNetworking_) {
+        if (serverAlias_.Empty()) {
+            URHO3D_LOGERROR("Please set the server alias first!");
+            return false;
+        }
+        humblenet_p2p_register_alias(serverAlias_.CString());
+        URHO3D_LOGINFOF("Im the server!");
+        isServer_ = true;
+        return true;
+//        if (!humblenet_p2p_is_initialized()) {
+//            URHO3D_LOGERROR("P2P Not yet initialized");
+//            return false;
+//        }
+//        humblenet_p2p_register_alias("server_alias");
+//        return true;
+    }
 
 #ifndef __EMSCRIPTEN__
     SLNet::SocketDescriptor socket;//(port, AF_INET);
@@ -561,16 +547,12 @@ bool Network::StartServer(unsigned short port, unsigned int maxConnections)
 
 void Network::StopServer()
 {
+    if (crossPlatformNetworking_ && isServer_) {
+        isServer_ = false;
+        humblenet_p2p_unregister_alias(serverAlias_.CString());
+    }
 
 #ifndef __EMSCRIPTEN__
-#ifndef __ANDROID__
-    if (wsServer_) {
-        wsServer_->Stop();
-        delete wsServer_;
-        wsServer_ = nullptr;
-    }
-#endif
-
     clientConnections_.Clear();
 
     if (!rakPeer_)
@@ -664,28 +646,20 @@ void Network::BroadcastMessage(int msgID, bool reliable, bool inOrder, const uns
 
 void Network::BroadcastRemoteEvent(StringHash eventType, bool inOrder, const VariantMap& eventData)
 {
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#ifndef __EMSCRIPTEN__
     for (HashMap<SLNet::AddressOrGUID, SharedPtr<Connection> >::Iterator i = clientConnections_.Begin(); i != clientConnections_.End(); ++i)
         i->second_->SendRemoteEvent(eventType, inOrder, eventData);
-    for (auto it = clientConnections2_.begin(); it != clientConnections2_.end(); ++it)
-        it->second->SendRemoteEvent(eventType, inOrder, eventData);
 #endif
 }
 
 void Network::BroadcastRemoteEvent(Scene* scene, StringHash eventType, bool inOrder, const VariantMap& eventData)
 {
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#ifndef __EMSCRIPTEN__
     for (HashMap<SLNet::AddressOrGUID, SharedPtr<Connection> >::Iterator i = clientConnections_.Begin();
          i != clientConnections_.End(); ++i)
     {
         if (i->second_->GetScene() == scene)
             i->second_->SendRemoteEvent(eventType, inOrder, eventData);
-    }
-    for (auto it = clientConnections2_.begin();
-         it != clientConnections2_.end(); ++it)
-    {
-        if (it->second->GetScene() == scene)
-            it->second->SendRemoteEvent(eventType, inOrder, eventData);
     }
 #endif
 }
@@ -704,18 +678,12 @@ void Network::BroadcastRemoteEvent(Node* node, StringHash eventType, bool inOrde
     }
 
     Scene* scene = node->GetScene();
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#ifndef __EMSCRIPTEN__
     for (HashMap<SLNet::AddressOrGUID, SharedPtr<Connection> >::Iterator i = clientConnections_.Begin();
          i != clientConnections_.End(); ++i)
     {
         if (i->second_->GetScene() == scene)
             i->second_->SendRemoteEvent(node, eventType, inOrder, eventData);
-    }
-    for (auto it = clientConnections2_.begin();
-         it != clientConnections2_.end(); ++it)
-    {
-        if (it->second->GetScene() == scene)
-            it->second->SendRemoteEvent(node, eventType, inOrder, eventData);
     }
 #endif
 }
@@ -834,11 +802,9 @@ Vector<SharedPtr<Connection> > Network::GetClientConnections() const
         ret.Push(i->second_);
 #endif
 
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
-    for (auto i = clientConnections2_.begin();
-         i != clientConnections2_.end(); ++i)
-        ret.Push(i->second);
-#endif
+    for (auto i = clientConnections2_.Begin();
+         i != clientConnections2_.End(); ++i)
+        ret.Push(i->second_);
 
     return ret;
 }
@@ -846,6 +812,10 @@ Vector<SharedPtr<Connection> > Network::GetClientConnections() const
 
 bool Network::IsServerRunning() const
 {
+    if (crossPlatformNetworking_) {
+        return isServer_;
+    }
+
 #ifndef __EMSCRIPTEN__
     if (!rakPeer_)
         return false;
@@ -859,23 +829,19 @@ bool Network::CheckRemoteEvent(StringHash eventType) const
     return allowedRemoteEvents_.Contains(eventType);
 }
 
-#ifndef __ANDROID__
-void Network::HandleIncomingPacket(struct libwebsocket* socket, VectorBuffer& buffer, bool fromServer)
+void Network::HandleIncomingPacket(uint32_t peerId, unsigned const char* buff, int size, bool fromServer)
 {
-//    VectorBuffer buffer(buff, size);
-    // First byte is used by slikenet
-    buffer.ReadUByte();
-
+    VectorBuffer buffer(buff, size);
     unsigned int messageID = buffer.ReadUInt();
 //    URHO3D_LOGINFOF("MESSAGE ID %u", messageID);
-    unsigned dataStart = sizeof(unsigned int) + sizeof(unsigned char);
+    unsigned dataStart = sizeof(unsigned int);
 
     MemoryBuffer msg(buffer.GetData() + dataStart, buffer.GetSize() - dataStart);
     if (!fromServer)
     {
         // Only process messages from known sources
-        if (clientConnections2_.find(socket) != clientConnections2_.end()) {
-            Connection *connection = clientConnections2_[socket];
+        if (clientConnections2_.Contains(peerId)) {
+            Connection *connection = clientConnections2_[peerId];
             if (connection) {
                 if (connection->ProcessMessage((int) messageID, msg))
                     return;
@@ -889,16 +855,15 @@ void Network::HandleIncomingPacket(struct libwebsocket* socket, VectorBuffer& bu
                 eventData[P_DATA].SetBuffer(msg.GetData(), msg.GetSize());
                 connection->SendEvent(E_NETWORKMESSAGE, eventData);
             } else
-                URHO3D_LOGWARNINGF("Discarding message from unknown MessageConnection %d", socket);
+                URHO3D_LOGWARNINGF("Discarding message from unknown MessageConnection %d", peerId);
         }
     }
     else
     {
 //        MemoryBuffer buffer(buff + dataStart, size - dataStart);
-        bool processed = serverConnection_ && serverConnection_->ProcessMessage((int) messageID, msg);
+        bool processed = serverConnection_->ProcessMessage((int) messageID, msg);
     }
 }
-#endif
 
 #ifndef __EMSCRIPTEN__
 void Network::HandleIncomingPacket(SLNet::Packet* packet, bool isServer)
@@ -1102,13 +1067,106 @@ void Network::Update(float timeStep)
     int sId = 0;
     URHO3D_PROFILE(UpdateNetwork);
 
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
-    if (wsServer_) {
-        wsServer_->Process();
-    }
-#endif
+    if (crossPlatformNetworking_) {
+        humblenet_p2p_wait(10);
 
+        // fetch a peer
+        PeerId myPeer = humblenet_p2p_get_my_peer_id();
+
+        if ((int) myPeer != crossPlatformPeerId_) {
+            crossPlatformPeerId_ = myPeer;
+            URHO3D_LOGINFOF("My peer ID has changed to %d", crossPlatformPeerId_);
+            if (isServer_) {
+                humblenet_p2p_register_alias(serverAlias_.CString());
+                URHO3D_LOGINFO("Registering server alias");
+            }
+        }
+
+        if (!isServer_) {
+            PeerId serverPeer = humblenet_p2p_virtual_peer_for_alias("server_alias");
+            sId = serverPeer;
+            if (sId != oldServerPeerId) {
+                URHO3D_LOGINFOF("Server peer ID has changed to %u", sId);
+                oldServerPeerId = sId;
+                if (serverConnection_) {
+                    serverConnection_->SetPeerId(sId);
+                }
+            }
+            if (lastCrossPlatformMessage_.GetMSec(false) >= 3000) {
+                // try once a second
+//                    send_message(sId, 0, "Hello", 5, 0);
+                if (serverConnection_ && serverConnection_->IsConnectPending() && crossPlatformPeerId_ > 0) {
+                    serverConnection_->SetPeerId(sId);
+//                        VariantMap &data = GetEventDataMap();
+//                        serverConnection_->SendRemoteEvent("Testing", true, data);
+                    URHO3D_LOGINFOF("Sending HELLO message to server");
+                    VectorBuffer buffer;
+                    serverConnection_->SendMessage(MSG_HELLO, true, true, buffer);
+                }
+                lastCrossPlatformMessage_.Reset();
+            }
+        }
+        //    send_message(serverPeer, 1, "Hello from update", 17);
+
+        char buff[MAX_MESSAGE_SIZE];
+        bool done = false;
+
+        while (!done) {
+            PeerId remotePeer = 0;
+
+            int ret = humblenet_p2p_recvfrom(buff, sizeof(buff), &remotePeer, 10);
+
+            if (ret < 0) {
+                if (remotePeer != 0) {
+                    // disconnected client
+                    URHO3D_LOGINFOF("Peer disconnected %u", remotePeer);
+                    if (remotePeer == sId) {
+                        URHO3D_LOGINFOF("Server disconnected");
+                        serverConnection_.Reset();
+                        SendEvent(E_SERVERDISCONNECTED);
+                    }
+                    if (clientConnections2_.Contains(remotePeer)) {
+                        using namespace ClientDisconnected;
+                        VariantMap& eventData = GetEventDataMap();
+                        eventData[P_CONNECTION] = clientConnections2_[remotePeer];
+                        clientConnections2_[remotePeer]->SendEvent(E_CLIENTDISCONNECTED, eventData);
+                        clientConnections2_.Erase(remotePeer);
+                    }
+                } else {
+                    // error
+                    done = true;
+                }
+            } else if (ret > 0) {
+                // we received data process it
+//                process_message(remotePeer, buff, sizeof(buff), ret);
+//                URHO3D_LOGINFOF("We reiceived a message %d", remotePeer);
+                if (serverConnection_ && serverConnection_->GetPeerId() == remotePeer) {
+//                    URHO3D_LOGINFOF("Got message from server!");
+                    HandleIncomingPacket(remotePeer, (unsigned const char*)&buff, MAX_MESSAGE_SIZE, true);
+
+                } else {
+                    if (isServer_) {
+//                        URHO3D_LOGINFOF("Got message from client");
+                        if (!clientConnections2_.Contains(remotePeer)) {
+                            clientConnections2_[remotePeer] = new Connection(context_, true, remotePeer);
+                            URHO3D_LOGINFOF("New client connected %d", remotePeer);
+                            VectorBuffer buffer;
+                            clientConnections2_[remotePeer]->SendMessage(MSG_HELLO, true, true, buffer);
+                        }
+                        HandleIncomingPacket(remotePeer, (unsigned const char*)&buff, MAX_MESSAGE_SIZE, false);
+                    } else {
+                        URHO3D_LOGINFOF("Got message from someone else (Im the client)");
+                    }
+                }
+            } else {
+                // 0 return value means no more data to read
+                done = true;
+            }
+        }
+        return;
+    }
 #ifndef __EMSCRIPTEN__
+
     //Process all incoming messages for the server
     if (rakPeer_->IsActive())
     {
@@ -1128,60 +1186,6 @@ void Network::Update(float timeStep)
             HandleIncomingPacket(packet, false);
             rakPeerClient_->DeallocatePacket(packet);
         }
-    }
-#endif
-
-#ifndef __ANDROID__
-#ifndef __EMSCRIPTEN__
-    if (wsServer_) {
-        while(wsServer_->GetNumPackets() > 0) {
-            WSPacket &p = wsServer_->GetPacket();
-            HandleIncomingPacket(p.socket_, p.buffer_, false);
-            wsServer_->RemovePacket();
-        }
-    }
-#endif
-
-    if (wsClient_) {
-        while(wsClient_->GetNumPackets() > 0) {
-            HandleIncomingPacket(nullptr, wsClient_->GetPacket(), true);
-            if (wsClient_) {
-                wsClient_->RemovePacket();
-            }
-        }
-    }
-
-    if (!eventQueue_.Empty()) {
-        MutexLock lock(eventMutex_);
-        const StringHash& event = eventQueue_.Front().first_;
-        if (event == E_WSSERVERCONNECTED) {
-            serverConnection_->SetConnectPending(false);
-            URHO3D_LOGINFO("Connected to server!");
-
-            // Send the identity map now
-            VectorBuffer msg;
-            msg.WriteVariantMap(serverConnection_->GetIdentity());
-            serverConnection_->SendMessage(MSG_IDENTITY, true, true, msg);
-            SendEvent(E_SERVERCONNECTED);
-        } else if (event == E_WSSERVERDISCONNECTED) {
-            SendEvent(E_SERVERDISCONNECTED);
-            if (wsClient_) {
-                delete wsClient_;
-                wsClient_ = nullptr;
-            }
-        }
-#ifndef __EMSCRIPTEN__
-        else if (event == E_WSCLIENTDISCONNECTED) {
-            using namespace WSClientDisconnected;
-            struct libwebsocket* socket = static_cast<struct libwebsocket*>(eventQueue_.Front().second_[P_SOCKET].GetVoidPtr());
-            ClientDisconnected(socket);
-        } else if (event == E_WSCLIENTCONNECTED) {
-            using namespace WSClientConnected;
-            struct libwebsocket* socket = static_cast<struct libwebsocket*>(eventQueue_.Front().second_[P_SOCKET].GetVoidPtr());
-            NewConnectionEstablished(socket);
-        }
-#endif
-        eventQueue_.PopFront();
     }
 #endif
 }
@@ -1216,15 +1220,13 @@ void Network::PostUpdate(float timeStep)
                 }
 #endif
 
-#ifndef __ANDROID__
-                for (auto i = clientConnections2_.begin();
-                     i != clientConnections2_.end(); ++i)
+                for (auto i = clientConnections2_.Begin();
+                     i != clientConnections2_.End(); ++i)
                 {
-                    Scene* scene = i->second->GetScene();
+                    Scene* scene = i->second_->GetScene();
                     if (scene)
                         networkScenes_.Insert(scene);
                 }
-#endif
 
                 for (HashSet<Scene*>::ConstIterator i = networkScenes_.Begin(); i != networkScenes_.End(); ++i)
                     (*i)->PrepareNetworkUpdate();
@@ -1244,16 +1246,14 @@ void Network::PostUpdate(float timeStep)
                     i->second_->SendAllBuffers();
                 }
 #endif
-#ifndef __ANDROID__
-                for (auto i = clientConnections2_.begin();
-                     i != clientConnections2_.end(); ++i)
+                for (auto i = clientConnections2_.Begin();
+                     i != clientConnections2_.End(); ++i)
                 {
-                    i->second->SendServerUpdate();
-                    i->second->SendRemoteEvents();
-                    i->second->SendPackages();
-                    i->second->SendAllBuffers();
+                    i->second_->SendServerUpdate();
+                    i->second_->SendRemoteEvents();
+                    i->second_->SendPackages();
+                    i->second_->SendAllBuffers();
                 }
-#endif
             }
         }
 
@@ -1298,12 +1298,6 @@ void Network::OnServerConnected(const SLNet::AddressOrGUID& address)
     SendEvent(E_SERVERCONNECTED);
 }
 #endif
-
-void Network::AddEventToQueue(const StringHash& event, const VariantMap& eventData)
-{
-    MutexLock lock(eventMutex_);
-    eventQueue_.Push({event, eventData});
-}
 
 #ifndef __EMSCRIPTEN__
 void Network::OnServerDisconnected(const SLNet::AddressOrGUID& address)

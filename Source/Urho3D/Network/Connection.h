@@ -45,11 +45,6 @@ namespace SLNet
 }
 #endif
 
-#ifndef __ANDROID__
-struct internal_socket_t;
-struct libwebsocket;
-#endif
-
 namespace Urho3D
 {
 
@@ -133,19 +128,16 @@ public:
     /// Construct with context, RakNet connection address and Raknet peer pointer.
     Connection(Context* context, bool isClient, const SLNet::AddressOrGUID& address, SLNet::RakPeerInterface* peer);
 #endif
-#ifndef __ANDROID__
-    Connection(Context* context, bool isClient, internal_socket_t* socket);
-    Connection(Context* context, bool isClient, libwebsocket* socket);
-#endif
+    Connection(Context* context, bool isClient, uint32_t peerId = 0);
     /// Destruct.
     ~Connection() override;
 
     /// Get packet type based on the message parameters
     PacketType GetPacketType(bool reliable, bool inOrder);
     /// Send a message.
-    void SendMessage(int msgID, bool reliable, bool inOrder, const VectorBuffer& msg);
+    void SendMessage(int msgID, bool reliable, bool inOrder, const VectorBuffer& msg, unsigned contentID = 0);
     /// Send a message.
-    void SendMessage(int msgID, bool reliable, bool inOrder, const unsigned char* data, unsigned numBytes);
+    void SendMessage(int msgID, bool reliable, bool inOrder, const unsigned char* data, unsigned numBytes, unsigned contentID = 0);
     /// Send a remote event.
     void SendRemoteEvent(StringHash eventType, bool inOrder, const VariantMap& eventData = Variant::emptyVariantMap);
     /// Send a remote event with the specified node as sender.
@@ -191,11 +183,6 @@ public:
 #ifndef __EMSCRIPTEN__
     /// Set the the RakNet address/guid.
     void SetAddressOrGUID(const SLNet::AddressOrGUID& addr);
-
-#endif
-
-#ifndef __ANDROID__
-    void SetWSSocket(struct internal_socket_t* socket);
 #endif
 
     /// Return client identity.
@@ -271,6 +258,10 @@ public:
     /// Buffered packet size limit, when reached, packet is sent out immediately
     void SetPacketSizeLimit(int limit);
 
+    uint32_t GetPeerId() const { return peerId_; }
+
+    void SetPeerId(uint32_t id) { peerId_ = id; };
+
     /// Current controls.
     Controls controls_;
     /// Controls timestamp. Incremented after each sent update.
@@ -283,6 +274,8 @@ private:
     void HandleAsyncLoadFinished(StringHash eventType, VariantMap& eventData);
     /// Process a LoadScene message from the server. Called by Network.
     void ProcessLoadScene(int msgID, MemoryBuffer& msg);
+    void ProcessHello(int msgID, MemoryBuffer& msg);
+    void ProcessACK(int msgID, MemoryBuffer& msg);
     /// Process a SceneChecksumError message from the server. Called by Network.
     void ProcessSceneChecksumError(int msgID, MemoryBuffer& msg);
     /// Process a scene update message from the server. Called by Network.
@@ -372,16 +365,11 @@ private:
     Timer packetCounterTimer_;
     /// Last heard timer, resets when new packet is incoming.
     Timer lastHeardTimer_;
-
-#ifndef __ANDROID__
-    internal_socket_t* socket_{nullptr};
-    libwebsocket* wsi_{nullptr};
-#endif
-
     /// Outgoing packet buffer which can contain multiple messages
     HashMap<int, VectorBuffer> outgoingBuffer_;
     /// Outgoing packet size limit
     int packedMessageLimit_;
+    uint32_t peerId_;
 };
 
 }

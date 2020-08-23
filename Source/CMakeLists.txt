@@ -89,9 +89,7 @@ if (URHO3D_NETWORK)
         add_subdirectory (ThirdParty/Civetweb)
         add_subdirectory (ThirdParty/SLikeNet)
     endif ()
-    if (NOT ANDROID)
-        add_subdirectory (ThirdParty/HumbleNet)
-    endif()
+    add_subdirectory (ThirdParty/HumbleNet)
 endif ()
 
 if (URHO3D_DATABASE_ODBC)
@@ -152,7 +150,7 @@ endif ()
 add_subdirectory (Tools)
 
 # Urho3D samples
-#add_subdirectory (Samples)
+add_subdirectory (Samples)
 
 # Urho3D extras
 if (URHO3D_EXTRAS)

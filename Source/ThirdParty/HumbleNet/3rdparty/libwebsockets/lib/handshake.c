@@ -58,6 +58,8 @@ libwebsocket_read(struct libwebsocket_context *context,
 		     struct libwebsocket *wsi, unsigned char *buf, size_t len)
 {
 	size_t n;
+
+	printf("AAAAAAA");
 	switch (wsi->state) {
 
 	case WSI_STATE_HTTP_BODY:

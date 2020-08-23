@@ -37,7 +37,6 @@
 #include "../Scene/Scene.h"
 #include "../Scene/SceneEvents.h"
 #include "../Scene/SmoothedTransform.h"
-#include <cstdlib>
 
 #ifndef __EMSCRIPTEN__
 #include <SLikeNet/MessageIdentifiers.h>
@@ -51,18 +50,8 @@
 
 #include "../DebugNew.h"
 
-#ifndef __ANDROID__
-#ifndef __EMSCRIPTEN__
-#include <libwebsockets.h>
-#endif
-#include <libsocket.h>
-#endif
-
-#ifndef __ANDROID__
-struct internal_socket_t {
-    struct libwebsocket *wsi{nullptr};
-};
-#endif
+#include <cstdio>
+#include <HumbleNet/humblenet/include/humblenet_p2p.h>
 
 namespace Urho3D
 {
@@ -100,8 +89,8 @@ Connection::Connection(Context* context, bool isClient, const SLNet::AddressOrGU
     SetAddressOrGUID(address);
 }
 #endif
-#ifndef __ANDROID__
-Connection::Connection(Context* context, bool isClient, struct internal_socket_t* socket):
+
+Connection::Connection(Context* context, bool isClient, unsigned int peerId):
     Object(context),
     timeStamp_(0),
     sendMode_(OPSM_NONE),
@@ -109,25 +98,11 @@ Connection::Connection(Context* context, bool isClient, struct internal_socket_t
     connectPending_(false),
     sceneLoaded_(false),
     logStatistics_(false),
-    socket_(socket)
+    peerId_(peerId),
+    packedMessageLimit_(1024)
 {
     sceneState_.connection_ = this;
 }
-
-Connection::Connection(Context* context, bool isClient, struct libwebsocket* wsi):
-        Object(context),
-        timeStamp_(0),
-        sendMode_(OPSM_NONE),
-        isClient_(isClient),
-        connectPending_(false),
-        sceneLoaded_(false),
-        logStatistics_(false),
-        wsi_(wsi)
-{
-    sceneState_.connection_ = this;
-}
-
-#endif
 
 Connection::~Connection() {
     // Reset scene (remove possible owner references), as this connection is about to be destroyed
@@ -141,26 +116,27 @@ Connection::~Connection() {
 #endif
 }
 
-void Connection::SendMessage(int msgID, bool reliable, bool inOrder, const VectorBuffer& msg)
-{
-    SendMessage(msgID, reliable, inOrder, msg.GetData(), msg.GetSize());
-}
-
 PacketType Connection::GetPacketType(bool reliable, bool inOrder)
 {
-    if (reliable && inOrder) {
+    if (reliable && inOrder)
         return PT_RELIABLE_ORDERED;
-    }
-    if (reliable && !inOrder) {
+
+    if (reliable && !inOrder)
         return PT_RELIABLE_UNORDERED;
-    }
-    if (!reliable && inOrder) {
+
+    if (!reliable && inOrder)
         return PT_UNRELIABLE_ORDERED;
-    }
+
     return PT_UNRELIABLE_UNORDERED;
 }
 
-void Connection::SendMessage(int msgID, bool reliable, bool inOrder, const unsigned char* data, unsigned numBytes)
+void Connection::SendMessage(int msgID, bool reliable, bool inOrder, const VectorBuffer& msg, unsigned contentID)
+{
+    SendMessage(msgID, reliable, inOrder, msg.GetData(), msg.GetSize(), contentID);
+}
+
+void Connection::SendMessage(int msgID, bool reliable, bool inOrder, const unsigned char* data, unsigned numBytes,
+    unsigned contentID)
 {
     if (numBytes && !data)
     {
@@ -171,16 +147,12 @@ void Connection::SendMessage(int msgID, bool reliable, bool inOrder, const unsig
     PacketType type = GetPacketType(reliable, inOrder);
     VectorBuffer& buffer = outgoingBuffer_[type];
 
-    if (buffer.GetSize() + numBytes >= packedMessageLimit_) {
+    if (buffer.GetSize() + numBytes >= packedMessageLimit_)
         SendBuffer(type);
-    }
 
-    if (buffer.GetSize() == 0) {
-#ifndef __EMSCRIPTEN__
+    if (buffer.GetSize() == 0)
+    {
         buffer.WriteUByte((unsigned char)DefaultMessageIDTypes::ID_USER_PACKET_ENUM);
-#else
-        buffer.WriteUByte((unsigned char)0);
-#endif
         buffer.WriteUInt((unsigned int)MSG_PACKED_MESSAGE);
     }
 
@@ -308,9 +280,6 @@ void Connection::Disconnect(int waitMSec)
     if (peer_) {
         peer_->CloseConnection(*address_, true);
     }
-//    if (wsi_) {
-//        internal_close_socket(wsi_);
-//    }
 #endif
 }
 
@@ -336,75 +305,6 @@ void Connection::SendServerUpdate()
     }
 }
 
-void Connection::SendAllBuffers()
-{
-    SendBuffer(PT_RELIABLE_ORDERED);
-    SendBuffer(PT_RELIABLE_UNORDERED);
-    SendBuffer(PT_UNRELIABLE_ORDERED);
-    SendBuffer(PT_UNRELIABLE_UNORDERED);
-}
-
-void Connection::SendBuffer(PacketType type)
-{
-    VectorBuffer& buffer = outgoingBuffer_[type];
-    if (buffer.GetSize() == 0) {
-        return;
-    }
-
-#ifndef __EMSCRIPTEN__
-    PacketReliability reliability = PacketReliability::UNRELIABLE;
-    if (type == PT_UNRELIABLE_ORDERED) {
-        reliability = PacketReliability::UNRELIABLE_SEQUENCED;
-    }
-    if (type == PT_RELIABLE_ORDERED) {
-        reliability = PacketReliability::RELIABLE_ORDERED;
-    }
-    if (type == PT_RELIABLE_UNORDERED) {
-        reliability = PacketReliability::RELIABLE;
-    }
-    if (peer_) {
-        peer_->Send((const char *) buffer.GetData(), (int) buffer.GetSize(), HIGH_PRIORITY, reliability, (char) 0,
-                    *address_, false);
-        tempPacketCounter_.y_++;
-    }
-#endif
-
-#ifndef __ANDROID__
-    if (socket_) {
-#ifndef __EMSCRIPTEN__
-        if (socket_->wsi) {
-//            if (!lws_send_pipe_choked(socket_->wsi)) {
-            internal_write_socket(socket_, (const void *) buffer.GetData(), (int) buffer.GetSize());
-            tempPacketCounter_.y_++;
-//            } else {
-//                URHO3D_LOGERRORF("Unable to write data to websocket, pipe is choked!");
-//            }
-        }
-#else
-        internal_write_socket(socket_, (const void *) buffer.GetData(), (int) buffer.GetSize());
-            tempPacketCounter_.y_++;
-#endif
-    }
-#ifndef __EMSCRIPTEN__
-    if (wsi_) {
-        if (!lws_send_pipe_choked(wsi_)) {
-            char buf[LWS_SEND_BUFFER_PRE_PADDING + buffer.GetSize() + LWS_SEND_BUFFER_POST_PADDING];
-            memcpy(&buf[LWS_SEND_BUFFER_PRE_PADDING], buffer.GetData(), buffer.GetSize());
-            int retval = libwebsocket_write(wsi_, (unsigned char *) &buf[LWS_SEND_BUFFER_PRE_PADDING],
-                                            buffer.GetSize(), LWS_WRITE_BINARY);
-            if (retval < 0) {
-                URHO3D_LOGERRORF("Failed to write to WS, ret = %d", retval);
-            }
-            tempPacketCounter_.y_++;
-        } else {
-            URHO3D_LOGERRORF("Unable to write data to websocket, pipe is choked!");
-        }
-    }
-#endif
-#endif
-    buffer.Clear();
-}
-
 void Connection::SendClientUpdate()
 {
     if (!scene_ || !sceneLoaded_)
@@ -420,14 +320,14 @@ void Connection::SendClientUpdate()
         msg_.WriteVector3(position_);
     if (sendMode_ >= OPSM_POSITION_ROTATION)
         msg_.WritePackedQuaternion(rotation_);
-    SendMessage(MSG_CONTROLS, false, false, msg_);
+    SendMessage(MSG_CONTROLS, false, false, msg_, CONTROLS_CONTENT_ID);
 
     ++timeStamp_;
 }
 
 void Connection::SendRemoteEvents()
 {
-#ifdef defined(URHO3D_LOGGING) && !defined(__EMSCRIPTEN__)
+#ifdef URHO3D_LOGGING
     if (logStatistics_ && statsTimer_.GetMSec(false) > STATS_INTERVAL_MSEC)
     {
         statsTimer_.Reset();
@@ -518,12 +418,14 @@ void Connection::SendBuffer(PacketType type)
     if (type == PT_RELIABLE_UNORDERED)
         reliability = PacketReliability::RELIABLE;
 
+#ifndef __EMSCRIPTEN__
     if (peer_) {
-        peer_->Send((const char *) buffer.GetData(), (int) buffer.GetSize(), HIGH_PRIORITY, reliability, (char) 0,
-                    *address_, false);
+        peer_->Send((const char *) buffer.GetData(), (int) buffer.GetSize(), HIGH_PRIORITY, reliability, (char) 0, *address_, false);
         tempPacketCounter_.y_++;
     }
+#endif
 
+    humblenet_p2p_sendto((const char *) buffer.GetData(), (int) buffer.GetSize(), peerId_, SEND_RELIABLE, 10);
     buffer.Clear();
 }
 
@@ -572,13 +474,35 @@ void Connection::ProcessPendingLatestData()
     }
 }
 
-bool Connection::ProcessMessage(int msgID, MemoryBuffer& buffer) {
-    tempPacketCounter_.x_++;
-    if (buffer.GetSize() == 0) {
-        return true;
-    }
+void Connection::ProcessHello(int msgID, MemoryBuffer& msg)
+{
+    VectorBuffer buffer;
+    SendMessage(MSG_ACK, true, true, buffer);
+}
 
-    if (msgID != MSG_PACKED_MESSAGE) {
+void Connection::ProcessACK(int msgID, MemoryBuffer& msg)
+{
+    SetConnectPending(false);
+    VectorBuffer buffer;
+    buffer.WriteVariantMap(identity_);
+    SendMessage(MSG_IDENTITY, true, true, buffer);
+
+    if (isClient_) {
+        using namespace ClientConnected;
+        VariantMap& eventData = GetEventDataMap();
+        eventData[P_CONNECTION] = this;
+        SendEvent(E_CLIENTCONNECTED, eventData);
+    }
+}
+
+bool Connection::ProcessMessage(int msgID, MemoryBuffer& buffer)
+{
+    tempPacketCounter_.x_++;
+    if (buffer.GetSize() == 0)
+        return false;
+
+    if (msgID != MSG_PACKED_MESSAGE)
+    {
         ProcessUnknownMessage(msgID, buffer);
         return true;
     }
@@ -1259,21 +1183,7 @@ int Connection::GetPacketsOutPerSec() const
 
 String Connection::ToString() const
 {
-#ifndef __EMSCRIPTEN__
-    if (peer_) {
-        return GetAddress() + ":" + String(GetPort());
-    }
-#endif
-#ifndef __ANDROID__
-    if (socket_) {
-        return "WS Server Socket";
-    }
-    if (wsi_) {
-        return "WS Client socket";
-    }
-#endif
-
-    return "";
+    return GetAddress() + ":" + String(GetPort());
 }
 
 unsigned Connection::GetNumDownloads() const
@@ -1414,8 +1324,6 @@ void Connection::ProcessNewNode(Node* node)
     // Write node's attributes
     node->WriteInitialDeltaUpdate(msg_, timeStamp_);
 
-    URHO3D_LOGINFOF("Received node %d", node->GetID());
-
     // Write node's user variables
     const VariantMap& vars = node->GetVars();
     msg_.WriteVLE(vars.Size());
@@ -1496,7 +1404,7 @@ void Connection::ProcessExistingNode(Node* node, NodeReplicationState& nodeState
             msg_.WriteNetID(node->GetID());
             node->WriteLatestDataUpdate(msg_, timeStamp_);
 
-            SendMessage(MSG_NODELATESTDATA, true, false, msg_);
+            SendMessage(MSG_NODELATESTDATA, true, false, msg_, node->GetID());
         }
 
         // Send deltaupdate if remaining dirty bits, or vars have changed
@@ -1574,7 +1482,7 @@ void Connection::ProcessExistingNode(Node* node, NodeReplicationState& nodeState
                     msg_.WriteNetID(component->GetID());
                     component->WriteLatestDataUpdate(msg_, timeStamp_);
 
-                    SendMessage(MSG_COMPONENTLATESTDATA, true, false, msg_);
+                    SendMessage(MSG_COMPONENTLATESTDATA, true, false, msg_, component->GetID());
                 }
 
                 // Send deltaupdate if remaining dirty bits
@@ -1823,13 +1731,6 @@ void Connection::SetAddressOrGUID(const SLNet::AddressOrGUID& addr)
     delete address_;
     address_ = nullptr;
     address_ = new SLNet::AddressOrGUID(addr);
-}
-#endif
-
-#ifndef __ANDROID__
-void Connection::SetWSSocket(struct internal_socket_t* socket)
-{
-    socket_ = socket;
 }
 #endif
 

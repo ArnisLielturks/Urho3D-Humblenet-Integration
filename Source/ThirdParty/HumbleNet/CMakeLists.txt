@@ -28,17 +28,14 @@ set(HUMBLENET_DESKTOP OFF)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-message(STATUS "results 1 ${WIN32} ${UNIX} ${APPLE} ${EMSCRIPTEN} ${WEB}")
 if(WIN32 OR LINUX OR APPLE)
-	message(STATUS "results 1.1")
 	if (NOT EMSCRIPTEN AND NOT WEB)
-		message(STATUS "results 1.2")
 		set(HUMBLENET_NATIVE ON)
 		set(HUMBLENET_DESKTOP ON)
 	endif()
 endif()
 
-message(STATUS "results 2 ${HUMBLENET_NATIVE} ${HUMBLENET_DESKTOP} ${WEB} ${EMSCRIPTEN}")
+message(STATUS "${HUMBLENET_NATIVE} ${HUMBLENET_DESKTOP} AAA ${WEB} ${EMSCRIPTEN}")
 
 option(HUMBLENET_SERVER "Build the humblenet Server" ${HUMBLENET_DESKTOP})
 option(HUMBLENET_TESTS "Build the humblenet tests" OFF)
@@ -204,7 +201,6 @@ if(HUMBLENET_NATIVE)
 			${LWS_BORING_CONFIG}
 			${LINUX_ARCH_CONFIG}
 	)
-
 	if(USE_BORINGSSL)
 		ExternalProject_Add_StepDependencies(websockets-build configure BoringSSL-build)
 	endif()
@@ -281,18 +277,20 @@ if(NOT HAVE_DLOPEN)
 endif()
 
 if(HUMBLENET_DESKTOP)
-#	add_subdirectory(3rdparty/Amalgamate	amalgamate-build)
-#	add_subdirectory(3rdparty/json-parser	json-parser)
-#	add_subdirectory(src/api_builder		apibuilder-build)
+	add_subdirectory(3rdparty/Amalgamate	amalgamate-build)
+	add_subdirectory(3rdparty/json-parser	json-parser)
+	add_subdirectory(src/api_builder		apibuilder-build)
 endif()
 add_subdirectory(3rdparty/crc				crc)
 add_subdirectory(3rdparty/sha1				sha1)
-#add_subdirectory(3rdparty/flatbuffers       flatbuffers)
+add_subdirectory(3rdparty/flatbuffers       flatbuffers)
 add_subdirectory(src/humblenet				humblenet)
-#include_directories(3rdparty/flatbuffers/include)
+include_directories(3rdparty/flatbuffers/include)
+if(HUMBLENET_SERVER)
+	add_subdirectory(src/peer-server		peer-server-build)
+endif()
 if(HUMBLENET_TESTS)
 	add_subdirectory(tests					test)
 endif()
 
-install_header_files (DIRECTORY src/humblenet/src DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
-install_header_files (DIRECTORY 3rdparty/libwebsockets/lib DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
+install_header_files (DIRECTORY src/ DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant

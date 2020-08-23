@@ -581,7 +581,7 @@ static int ringbuffer_head;
 static int
 callback_lws_mirror(struct libwebsocket_context *context,
 			struct libwebsocket *wsi,
-			enum libwebsocket_callback_reasons reason,
+			enum libwebsocket_callback_r§easons reason,
 					       void *user, void *in, size_t len)
 {
 	int n;

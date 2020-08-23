@@ -670,8 +670,8 @@ else ()
         if (WEB)
             if (EMSCRIPTEN)
                 # Emscripten-specific setup
-                set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-warn-absolute-paths -Wno-unknown-warning-option --bind -g4 --source-map-base")
-                set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-warn-absolute-paths -Wno-unknown-warning-option --bind -g4 --source-map-base")
+                set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-warn-absolute-paths -Wno-unknown-warning-option --bind")
+                set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-warn-absolute-paths -Wno-unknown-warning-option --bind")
 
                 if (URHO3D_THREADING)
                     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -s USE_PTHREADS=1")
@@ -903,10 +903,6 @@ macro (define_dependency_libs TARGET)
         endif ()
     endif ()
 
-    if (${TARGET_NAME} STREQUAL Urho3D AND NOT ANDROID)
-        list (APPEND LIBS humblenet)
-    endif()
-
     # Urho3D external dependency
     if (${TARGET} STREQUAL Urho3D)
         # Core
@@ -958,6 +954,11 @@ macro (define_dependency_libs TARGET)
                 list (APPEND ABSOLUTE_PATH_LIBS ${URHO3D_LIBRARIES})
             endif ()
         endif ()
+
+        list (APPEND LIBS
+                humblenet
+                humblepeer
+                )
     endif ()
 endmacro ()
 
@@ -1127,7 +1128,6 @@ macro (add_html_shell)
                 string (REPLACE "<body>" "<body>\n<script>document.body.innerHTML=document.body.innerHTML.replace(/^#!.*\\n/, '');</script>\n<a href=\"https://urho3d.github.io\" title=\"Urho3D Homepage\"><img src=\"https://urho3d.github.io/assets/images/logo.png\" alt=\"link to https://urho3d.github.io\" height=\"80\" width=\"160\" /></a>\n" HTML_SHELL "${HTML_SHELL}")
                 file (WRITE ${CMAKE_BINARY_DIR}/Source/shell.html "${HTML_SHELL}")
                 set (HTML_SHELL ${CMAKE_BINARY_DIR}/Source/shell.html)
-                set (URHO3D_CUSTOM_SHELL FALSE)
             else ()
                 set (HTML_SHELL ${CMAKE_SOURCE_DIR}/bin/shell.html)
             endif ()
@@ -1730,7 +1730,6 @@ macro (_setup_target)
     # Include directories
     include_directories (${INCLUDE_DIRS})
     # Link libraries
-    message(STATUS "AAA ${TARGET_NAME}" )
     define_dependency_libs (${TARGET_NAME})
     target_link_libraries (${TARGET_NAME} ${ABSOLUTE_PATH_LIBS} ${LIBS})
     # Enable PCH if requested

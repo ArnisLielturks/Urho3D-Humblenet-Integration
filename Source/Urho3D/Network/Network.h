@@ -26,16 +26,6 @@
 #include "../Core/Object.h"
 #include "../IO/VectorBuffer.h"
 #include "../Network/Connection.h"
-#ifndef __EMSCRIPTEN__
-#include "../Network/WS/WSServer.h"
-#endif
-#include "../Network/WS/WSClient.h"
-#include <unordered_map>
-
-#ifndef __ANDROID__
-struct internal_socket_t;
-struct libwebsocket;
-#endif
 
 namespace Urho3D
 {
@@ -48,10 +38,6 @@ class Scene;
 class URHO3D_API Network : public Object
 {
     URHO3D_OBJECT(Network, Object);
-#ifndef __EMSCRIPTEN__
-    friend class WSServer;
-#endif
-    friend class WSClient;
 
 public:
     /// Construct.
@@ -64,14 +50,8 @@ public:
     void HandleMessage(const SLNet::AddressOrGUID& source, int packetID, int msgID, const char* data, size_t numBytes);
     /// Handle a new client connection.
     void NewConnectionEstablished(const SLNet::AddressOrGUID& connection);
-#ifndef __ANDROID__
-    void NewConnectionEstablished(struct libwebsocket* socket);
-#endif
     /// Handle a client disconnection.
     void ClientDisconnected(const SLNet::AddressOrGUID& connection);
-#ifndef __ANDROID__
-    void ClientDisconnected(struct libwebsocket* socket);
-#endif
 #endif
 
     /// Set the data that will be used for a reply to attempts at host discovery on LAN/subnet.
@@ -87,9 +67,11 @@ public:
     /// Disconnect the connection to the server. If wait time is non-zero, will block while waiting for disconnect to finish.
     void Disconnect(int waitMSec = 0);
 
-#ifndef __ANDROID__
-    void WSConnect(const String& address, Scene* scene, const VariantMap& identity = Variant::emptyVariantMap);
-#endif
+    void InitCrossPlatformNetworking(const String& address, const String& gameToken, const String& gameSecret);
+    void ConnectCrossPlatform(const String& alias, Scene* scene, const VariantMap& identity = Variant::emptyVariantMap);
+    void SetCrossPlatformServerAlias(const String& alias);
+    int GetCrossPlatformPeerId();
+    void CrossPlatformDisconnect();
 
     /// Start a server on a port using UDP protocol. Return true if successful.
     bool StartServer(unsigned short port, unsigned int maxConnections = 128);
@@ -161,14 +143,7 @@ public:
     /// Send outgoing messages after frame logic. Called by HandleRenderUpdate.
     void PostUpdate(float timeStep);
 
-#ifndef __ANDROID__
-    void HandleIncomingPacket(struct libwebsocket* socket, VectorBuffer& buffer, bool fromServer);
-#endif
-
-    void AddEventToQueue(const StringHash& event, const VariantMap& eventData = Variant::emptyVariantMap);
-
 private:
-
     /// Handle begin frame event.
     void HandleBeginFrame(StringHash eventType, VariantMap& eventData);
     /// Handle render update frame event.
@@ -183,6 +158,7 @@ private:
 #endif
     /// Reconfigure network simulator parameters on all existing connections.
     void ConfigureNetworkSimulator();
+    void HandleIncomingPacket(uint32_t peerId, unsigned const char* buff, int size, bool isServer);
 
 #ifndef __EMSCRIPTEN__
     /// SLikeNet peer instance for server connection.
@@ -196,9 +172,7 @@ private:
 #ifndef __EMSCRIPTEN__
     HashMap<SLNet::AddressOrGUID, SharedPtr<Connection> > clientConnections_;
 #endif
-#ifndef __ANDROID__
-    std::unordered_map<struct libwebsocket*, SharedPtr<Connection>> clientConnections2_;
-#endif
+    HashMap<uint32_t , SharedPtr<Connection> > clientConnections2_;
     /// Allowed remote events.
     HashSet<StringHash> allowedRemoteEvents_;
     /// Remote event fixed blacklist.
@@ -238,16 +212,10 @@ private:
     /// Local server GUID.
     String guid_;
 
-#ifndef __ANDROID__
-#ifndef __EMSCRIPTEN__
-    WSServer* wsServer_{nullptr};
-#endif
-    WSClient* wsClient_{nullptr};
-#endif
-
-    Mutex eventMutex_;
-    List<Pair<StringHash, VariantMap>> eventQueue_;
-
+    bool crossPlatformNetworking_{false};
+    Timer lastCrossPlatformMessage_;
+    String serverAlias_;
+    int crossPlatformPeerId_{0};
 };
 
 /// Register Network library objects.
