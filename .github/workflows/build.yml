@@ -12,6 +12,7 @@ jobs:
       run: |
         cp -r Source/* Urho3D/Source/
         cp -r script/* Urho3D/script/
+        cp -r CMake/* Urho3D/CMake/
     - name: Build engine
       run: |
         cd Urho3D
