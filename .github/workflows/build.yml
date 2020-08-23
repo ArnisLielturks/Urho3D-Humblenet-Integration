@@ -11,6 +11,7 @@ jobs:
     - name: Copy contents
       run: |
         cp -r Source/* Urho3D/Source/
+        cp -r script/* Urho3D/script/
     - name: Build engine
       run: |
         cd Urho3D
