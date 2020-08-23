@@ -1,0 +1,17 @@
+name: Build
+
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Clone Urho3D
+      run: git clone --depth 1 https://github.com/urho3d/Urho3D.git
+    - name: Copy contents
+      run: |
+        cp -r Source/* Urho3D/Source/
+    - name: Build engine
+      run: |
+        cd Urho3D
+        ./script/dockerized.sh native
