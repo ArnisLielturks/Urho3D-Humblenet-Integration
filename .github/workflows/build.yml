@@ -6,6 +6,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+    - name: Install libs
+      run: sudo apt update && sudo apt install libgl1-mesa-dev
     - name: Clone Urho3D
       run: git clone --depth 1 https://github.com/urho3d/Urho3D.git
     - name: Copy contents
