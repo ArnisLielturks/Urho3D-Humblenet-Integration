@@ -568,6 +568,3 @@ if (URHO3D_SCP_TO_TARGET)
     add_custom_command (TARGET ${TARGET_NAME} POST_BUILD COMMAND scp $<TARGET_FILE:${TARGET_NAME}> ${URHO3D_SCP_TO_TARGET} || exit 0
         COMMENT "Scp-ing Urho3D library to target system")
 endif ()
-
-install_header_files (DIRECTORY ${CMAKE_SOURCE_DIR}/Source/ThirdParty/HumbleNet/src/humblenet/src DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
-install_header_files (DIRECTORY ${CMAKE_SOURCE_DIR}/Source/ThirdParty/HumbleNet/3rdparty/libwebsockets/lib DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
