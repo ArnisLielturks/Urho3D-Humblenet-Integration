@@ -18,6 +18,6 @@ jobs:
     - name: Build engine
       run: |
         cd Urho3D
-        ./script/cmake_generic.sh build
+        ./script/cmake_generic.sh build -DURHO3D_TOOLS=0
         cd build
         make -j$(nproc)
