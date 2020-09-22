@@ -295,5 +295,5 @@ if(HUMBLENET_TESTS)
 endif()
 
 file(MAKE_DIRECTORY ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet)
-install_header_files (DIRECTORY ${CMAKE_SOURCE_DIR}/Source/ThirdParty/HumbleNet/src/humblenet/src DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
-install_header_files (DIRECTORY ${CMAKE_SOURCE_DIR}/Source/ThirdParty/HumbleNet/3rdparty/libwebsockets/lib DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
+install_header_files (DIRECTORY ${CMAKE_SOURCE_DIR}/Source/ThirdParty/HumbleNet/src/humblenet/src/ DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
+install_header_files (DIRECTORY ${CMAKE_SOURCE_DIR}/Source/ThirdParty/HumbleNet/3rdparty/libwebsockets/lib/ DESTINATION ${DEST_INCLUDE_DIR}/ThirdParty/HumbleNet FILES_MATCHING PATTERN *.h BUILD_TREE_ONLY)  # Note: the trailing slash is significant
